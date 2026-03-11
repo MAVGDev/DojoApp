@@ -22,7 +22,7 @@ const connectDB = async () => {
 // ✅ FUNCIÓN PARA CREAR ADMIN POR DEFECTO
 const createDefaultAdmin = async () => {
   try {
-    const adminEmail = 'admin@dojo.com';
+    const adminEmail ='admin@dojo.com';
     
     // Verificar si ya existe un admin
     const adminExists = await User.findOne({ 
@@ -44,7 +44,7 @@ const createDefaultAdmin = async () => {
       
       console.log('👑 Usuario administrador creado:');
       console.log('   📧 Email:', adminEmail);
-      console.log('   🔑 Contraseña: Admin123');
+      console.log('   🔑 Contraseña:Admin123');
       console.log('   ⚠️  ¡Cambia esta contraseña inmediatamente!');
     } else {
       console.log('👑 Usuario administrador ya existe');

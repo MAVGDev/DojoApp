@@ -58,7 +58,7 @@ const registerUser = async (req, res) => {
       
       informacionFederacion: {
         nombreFederacion: '', 
-        numeroLicencia: '', 
+        numeroLicencia: null, 
         fechaVencimientoLicencia: null,
         tipoLicencia: 'competencia',
         federadoActual: false, 
