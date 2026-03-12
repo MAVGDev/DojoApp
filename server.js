@@ -10,6 +10,8 @@ import studentRoutes from './routes/students.js';
 import paymentRoutes from './routes/payments.js';
 import eventRoutes from './routes/events.js';
 import dashboardRoutes from './routes/dashboard.js';
+import chargeRoutes from './routes/Chargeroutes.js';
+app.use('/api/charges', chargeRoutes)
 
 dotenv.config();
 
