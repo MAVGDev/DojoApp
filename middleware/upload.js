@@ -1,17 +1,14 @@
 import multer from 'multer';
+import { Readable } from 'stream';
 import cloudinary from '../config/cloudinary.js';
-import { v2 as cloudinaryV2 } from 'cloudinary';
 
-// Configuración Multer con almacenamiento en memoria
-const storage = multer.memoryStorage();
-
-// Middleware Multer
+// Multer: almacenamiento en memoria
 const uploadSinglePhoto = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
   fileFilter: (req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|gif|webp/;
-    if (allowedTypes.test(file.mimetype.toLowerCase())) {
+    const allowed = /jpeg|jpg|png|gif|webp/;
+    if (allowed.test(file.mimetype.toLowerCase())) {
       cb(null, true);
     } else {
       cb(new Error('Solo se permiten imágenes (jpeg, jpg, png, gif, webp)'));
@@ -19,61 +16,72 @@ const uploadSinglePhoto = multer({
   }
 }).single('foto');
 
-// Middleware para subir archivo a Cloudinary
+// Convierte un Buffer en stream y lo sube a Cloudinary
+// Sin dependencias externas — usa Readable de Node.js core
+function uploadBufferToCloudinary(buffer, options) {
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(options, (error, result) => {
+      if (error) return reject(error);
+      resolve(result);
+    });
+
+    const readable = new Readable();
+    readable._read = () => {};
+    readable.push(buffer);
+    readable.push(null); // señal de fin de stream
+    readable.pipe(uploadStream);
+  });
+}
+
+// Middleware que sube el archivo a Cloudinary tras pasar por Multer
 const handleUpload = async (req, res, next) => {
-  if (!req.file) return next(); // Si no hay archivo, pasa al siguiente middleware
+  if (!req.file) return next();
 
   try {
-    const folder = 'gym-management/students';
-    const studentId = req.params.id || req.user.studentProfile || 'unknown';
-    const timestamp = Date.now();
-    const publicId = `student-${studentId}-${timestamp}`;
+    const folder    = 'gym-management/students';
+    const studentId = req.params.id || req.user?.studentProfile || 'unknown';
+    const publicId  = `student-${studentId}-${Date.now()}`;
 
-    // Subir a Cloudinary
-    const result = await cloudinary.uploader.upload_stream(
-      {
-        folder,
-        public_id: publicId,
-        overwrite: true,
-        resource_type: 'image',
-        transformation: [
-          { width: 500, height: 500, crop: 'fill', gravity: 'face' },
-          { quality: 'auto:good' },
-          { fetch_format: 'auto' }
-        ]
-      },
-      (error, uploaded) => {
-        if (error) return next(error);
-        req.file.cloudinaryUrl = uploaded.secure_url;
-        req.file.cloudinaryId = uploaded.public_id;
-        next();
-      }
-    );
+    const result = await uploadBufferToCloudinary(req.file.buffer, {
+      folder,
+      public_id: publicId,
+      overwrite: true,
+      resource_type: 'image',
+      transformation: [
+        { width: 500, height: 500, crop: 'fill', gravity: 'face' },
+        { quality: 'auto:good' },
+        { fetch_format: 'auto' }
+      ]
+    });
 
-    // Convertir el buffer de Multer a stream
-    const streamifier = await import('streamifier');
-    streamifier.createReadStream(req.file.buffer).pipe(result);
-
+    req.file.path         = result.secure_url;
+    req.file.cloudinaryId = result.public_id;
+    next();
   } catch (err) {
+    console.error('❌ Error subiendo a Cloudinary:', err.message);
     next(err);
   }
 };
 
-// Función para eliminar foto antigua de Cloudinary
+// Eliminar foto antigua de Cloudinary
 const deleteOldPhoto = async (photoUrl) => {
-  if (!photoUrl) return;
+  if (!photoUrl || !photoUrl.includes('cloudinary.com')) return;
 
   try {
-    const urlParts = photoUrl.split('/');
+    const urlParts    = photoUrl.split('/');
     const uploadIndex = urlParts.indexOf('upload');
     if (uploadIndex === -1) return;
 
-    const pathParts = urlParts.slice(uploadIndex + 1);
-    let publicId = pathParts.join('/').replace(/\.[^/.]+$/, ''); // Quitar extensión
-    await cloudinary.uploader.destroy(publicId);
-    console.log(`✅ Foto eliminada de Cloudinary: ${publicId}`);
+    const afterUpload = urlParts.slice(uploadIndex + 1);
+    const startIndex  = /^v\d+$/.test(afterUpload[0]) ? 1 : 0;
+    const publicId    = afterUpload.slice(startIndex).join('/').replace(/\.[^/.]+$/, '');
+
+    if (publicId) {
+      await cloudinary.uploader.destroy(publicId);
+      console.log(`✅ Foto eliminada de Cloudinary: ${publicId}`);
+    }
   } catch (error) {
-    console.error('❌ Error eliminando foto antigua:', error.message);
+    console.error('⚠️ No se pudo eliminar la foto antigua:', error.message);
   }
 };
 

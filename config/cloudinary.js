@@ -1,4 +1,4 @@
-import cloudinary from 'cloudinary'; // ✅ Sin { v2 as cloudinary }
+import { v2 as cloudinary } from 'cloudinary'; // ✅ Sin { v2 as cloudinary }
 import dotenv from 'dotenv';
 
 dotenv.config();
