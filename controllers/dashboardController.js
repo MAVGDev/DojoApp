@@ -21,17 +21,6 @@ export const getAdminStats = async (req, res) => {
       ]),
     ]);
 
-    // DEBUG TEMPORAL — borrar después de verificar
-    console.log('💰 ingresosPayments:', ingresosPayments)
-    console.log('💰 ingresosCharges:', ingresosCharges)
-
-    // Si los cargos tienen paymentDate null, los sumamos igual
-    const chargesSinFecha = await Charge.aggregate([
-      { $match: { paid: true } },
-      { $group: { _id: null, total: { $sum: '$amount' } } }
-    ]);
-    console.log('💰 Charges pagados (sin filtro fecha):', chargesSinFecha)
-
     const ingresosMes = (ingresosPayments[0]?.total || 0) + (ingresosCharges[0]?.total || 0);
 
     const eventosMes = await Event.countDocuments({
