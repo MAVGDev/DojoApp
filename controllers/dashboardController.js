@@ -1,44 +1,55 @@
 import Student from '../models/Student.js';
 import Payment from '../models/Payment.js';
 import Event from '../models/Event.js';
-
+import Charge from '../models/Charge.js';
 
 export const getAdminStats = async (req, res) => {
   try {
     const today = new Date();
     const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
-    // Student usa 'activo' no 'active'
     const totalEstudiantes = await Student.countDocuments({ activo: true });
 
-    // Payment usa 'paid: true' y 'paymentDate', no 'status: paid'
-    const ingresosResult = await Payment.aggregate([
-      {
-        $match: {
-          paid: true,
-          paymentDate: { $gte: startOfMonth, $lte: today }
-        }
-      },
+    const [ingresosPayments, ingresosCharges] = await Promise.all([
+      Payment.aggregate([
+        { $match: { paid: true, paymentDate: { $gte: startOfMonth, $lte: today } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]),
+      Charge.aggregate([
+        { $match: { paid: true, paymentDate: { $gte: startOfMonth, $lte: today } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]),
+    ]);
+
+    // DEBUG TEMPORAL — borrar después de verificar
+    console.log('💰 ingresosPayments:', ingresosPayments)
+    console.log('💰 ingresosCharges:', ingresosCharges)
+
+    // Si los cargos tienen paymentDate null, los sumamos igual
+    const chargesSinFecha = await Charge.aggregate([
+      { $match: { paid: true } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
+    console.log('💰 Charges pagados (sin filtro fecha):', chargesSinFecha)
+
+    const ingresosMes = (ingresosPayments[0]?.total || 0) + (ingresosCharges[0]?.total || 0);
 
     const eventosMes = await Event.countDocuments({
       date: { $gte: startOfMonth, $lte: today }
     });
 
-    // Payment usa 'paid: false' y 'dueDate', no 'status: pending'
-    const alertasActivas = await Payment.countDocuments({
-      paid: false,
-      dueDate: { $lt: today }
-    });
+    const [alertasPagos, alertasCharges] = await Promise.all([
+      Payment.countDocuments({ paid: false, dueDate: { $lt: today } }),
+      Charge.countDocuments({ paid: false, dueDate: { $lt: today } }),
+    ]);
 
     res.json({
       success: true,
       data: {
         totalEstudiantes,
-        ingresosMes: ingresosResult[0]?.total || 0,
+        ingresosMes,
         eventosMes,
-        alertasActivas
+        alertasActivas: alertasPagos + alertasCharges
       }
     });
   } catch (error) {
@@ -47,10 +58,8 @@ export const getAdminStats = async (req, res) => {
   }
 };
 
-
 export const getMartialArtsDistribution = async (req, res) => {
   try {
-    // Student usa 'activo' y 'arteMarcial'
     const totalActivos = await Student.countDocuments({ activo: true });
 
     const distribution = await Student.aggregate([
@@ -75,33 +84,56 @@ export const getMartialArtsDistribution = async (req, res) => {
   }
 };
 
-
 export const getPaymentsStatus = async (req, res) => {
   try {
     const today = new Date();
     const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
-    const pagadosMes = await Payment.aggregate([
-      { $match: { paid: true, paymentDate: { $gte: startOfMonth, $lte: today } } },
-      { $group: { _id: null, cantidad: { $sum: 1 }, total: { $sum: '$amount' } } }
+    const [pagadosMes, pendientesMes, vencidos] = await Promise.all([
+      Payment.aggregate([
+        { $match: { paid: true, paymentDate: { $gte: startOfMonth, $lte: today } } },
+        { $group: { _id: null, cantidad: { $sum: 1 }, total: { $sum: '$amount' } } }
+      ]),
+      Payment.aggregate([
+        { $match: { paid: false, dueDate: { $gte: startOfMonth, $lte: today } } },
+        { $group: { _id: null, cantidad: { $sum: 1 }, total: { $sum: '$amount' } } }
+      ]),
+      Payment.aggregate([
+        { $match: { paid: false, dueDate: { $lt: today } } },
+        { $group: { _id: null, cantidad: { $sum: 1 }, total: { $sum: '$amount' } } }
+      ]),
     ]);
 
-    const pendientesMes = await Payment.aggregate([
-      { $match: { paid: false, dueDate: { $gte: startOfMonth, $lte: today } } },
-      { $group: { _id: null, cantidad: { $sum: 1 }, total: { $sum: '$amount' } } }
-    ]);
-
-    const vencidos = await Payment.aggregate([
-      { $match: { paid: false, dueDate: { $lt: today } } },
-      { $group: { _id: null, cantidad: { $sum: 1 }, total: { $sum: '$amount' } } }
+    const [chargesPagados, chargesPendientes, chargesVencidos] = await Promise.all([
+      Charge.aggregate([
+        { $match: { paid: true, paymentDate: { $gte: startOfMonth, $lte: today } } },
+        { $group: { _id: null, cantidad: { $sum: 1 }, total: { $sum: '$amount' } } }
+      ]),
+      Charge.aggregate([
+        { $match: { paid: false, dueDate: { $gte: startOfMonth, $lte: today } } },
+        { $group: { _id: null, cantidad: { $sum: 1 }, total: { $sum: '$amount' } } }
+      ]),
+      Charge.aggregate([
+        { $match: { paid: false, dueDate: { $lt: today } } },
+        { $group: { _id: null, cantidad: { $sum: 1 }, total: { $sum: '$amount' } } }
+      ]),
     ]);
 
     res.json({
       success: true,
       data: {
-        pagados:    pagadosMes[0]   || { cantidad: 0, total: 0 },
-        pendientes: pendientesMes[0] || { cantidad: 0, total: 0 },
-        vencidos:   vencidos[0]     || { cantidad: 0, total: 0 }
+        pagados: {
+          cantidad: (pagadosMes[0]?.cantidad || 0) + (chargesPagados[0]?.cantidad || 0),
+          total:    (pagadosMes[0]?.total    || 0) + (chargesPagados[0]?.total    || 0),
+        },
+        pendientes: {
+          cantidad: (pendientesMes[0]?.cantidad || 0) + (chargesPendientes[0]?.cantidad || 0),
+          total:    (pendientesMes[0]?.total    || 0) + (chargesPendientes[0]?.total    || 0),
+        },
+        vencidos: {
+          cantidad: (vencidos[0]?.cantidad || 0) + (chargesVencidos[0]?.cantidad || 0),
+          total:    (vencidos[0]?.total    || 0) + (chargesVencidos[0]?.total    || 0),
+        },
       }
     });
   } catch (error) {
@@ -109,7 +141,6 @@ export const getPaymentsStatus = async (req, res) => {
     res.status(500).json({ success: false, message: 'Error al obtener estado de pagos' });
   }
 };
-
 
 export const getUpcomingEvents = async (req, res) => {
   try {
@@ -128,35 +159,35 @@ export const getUpcomingEvents = async (req, res) => {
   }
 };
 
-
 export const getActiveAlerts = async (req, res) => {
   try {
     const today = new Date();
 
-    // Student usa 'fullName' no 'firstName lastName'
-    const pagosPendientes = await Payment.find({
-      paid: false,
-      dueDate: { $lt: today }
-    })
-      .populate('student', 'fullName')
-      .sort({ dueDate: 1 })
-      .limit(5);
+    const [pagosPendientes, cargosPendientes] = await Promise.all([
+      Payment.find({ paid: false, dueDate: { $lt: today } })
+        .populate('student', 'fullName')
+        .sort({ dueDate: 1 })
+        .limit(5),
+      Charge.find({ paid: false, dueDate: { $lt: today } })
+        .populate('student', 'fullName')
+        .sort({ dueDate: 1 })
+        .limit(5),
+    ]);
 
     const weekFromNow = new Date();
     weekFromNow.setDate(today.getDate() + 7);
 
     const eventosProximos = await Event.find({
       date: { $gte: today, $lte: weekFromNow }
-    })
-      .sort({ date: 1 })
-      .limit(5);
+    }).sort({ date: 1 }).limit(5);
 
     res.json({
       success: true,
       data: {
         pagosPendientes,
+        cargosPendientes,
         eventosProximos,
-        total: pagosPendientes.length + eventosProximos.length
+        total: pagosPendientes.length + cargosPendientes.length + eventosProximos.length
       }
     });
   } catch (error) {
@@ -165,12 +196,10 @@ export const getActiveAlerts = async (req, res) => {
   }
 };
 
-
 export const getRecentStudents = async (req, res) => {
   try {
     const { limit = 5 } = req.query;
 
-    // Student usa 'activo', 'fullName', 'arteMarcial', 'cinturonActual'
     const students = await Student.find({ activo: true })
       .sort({ createdAt: -1 })
       .limit(parseInt(limit))
@@ -184,7 +213,6 @@ export const getRecentStudents = async (req, res) => {
   }
 };
 
-
 export const getStudentDashboard = async (req, res) => {
   try {
     const { id } = req.params;
@@ -194,21 +222,17 @@ export const getStudentDashboard = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Estudiante no encontrado' });
     }
 
-    // Verificar permisos: admin o el propio alumno
     if (req.user.role !== 'admin' && student.user._id.toString() !== req.user._id.toString()) {
       return res.status(403).json({ success: false, message: 'No autorizado' });
     }
 
     const currentYear = new Date().getFullYear();
 
-    const payments = await Payment.find({
-      student: id,
-      year: currentYear
-    }).sort({ month: -1 });
-
-    const events = await Event.find({
-      date: { $gte: new Date() }
-    }).sort({ date: 1 }).limit(5);
+    const [payments, charges, events] = await Promise.all([
+      Payment.find({ student: id, year: currentYear }).sort({ month: -1 }),
+      Charge.find({ student: id }).sort({ createdAt: -1 }),
+      Event.find({ date: { $gte: new Date() } }).sort({ date: 1 }).limit(5),
+    ]);
 
     res.json({
       success: true,
@@ -221,8 +245,9 @@ export const getStudentDashboard = async (req, res) => {
           federado:         student.informacionFederacion?.federadoActual ?? false,
           numeroFederacion: student.informacionFederacion?.numeroLicencia
         },
-        pagos:     payments,
-        eventos:   events,
+        pagos:      payments,
+        cargos:     charges,
+        eventos:    events,
         progresion: student.historialCinturones || []
       }
     });
